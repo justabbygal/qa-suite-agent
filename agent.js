@@ -269,9 +269,11 @@ claude.on('close', (code) => {
 });
 
 claude.on('error', (error) => {
-  clearInterval(heartbeat);
   reject(error);
 });
+
+  });   // closes new Promise(...)
+}       // closes runClaudeCode(...)
 
 // ============================================================
 // MAIN ORCHESTRATOR
