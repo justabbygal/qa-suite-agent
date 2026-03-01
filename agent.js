@@ -189,46 +189,89 @@ function runClaudeCode(prompt) {
     const startTime = Date.now();
 
     const claude = spawn('claude', [
-      '-p', prompt,
-      '--dangerously-skip-permissions',
-      '--output-format', 'text'
-    ], {
-      cwd: REPO_DIR,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
-      },
-      timeout: 1800000 // 30 minute timeout per task
-    });
+  '-p', prompt,
+  '--dangerously-skip-permissions',
+  '--output-format', 'stream-json',
+  '--verbose',
+  '--include-partial-messages',
+], {
+  cwd: REPO_DIR,
+  env: {
+    ...process.env,
+    ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
+  },
+  timeout: 1800000
+});
 
-    let stdout = '';
-    let stderr = '';
+let stdout = '';
+let stderr = '';
 
-    claude.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
+let lastEventAt = Date.now();
+const HEARTBEAT_MS = 10_000;     // log every 10s if nothing arrives
+const STUCK_MS = 120_000;        // treat 2 minutes of silence as “stuck”
 
-    claude.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
+const heartbeat = setInterval(() => {
+  const idle = Date.now() - lastEventAt;
+  if (idle >= HEARTBEAT_MS) {
+    console.log(`  Claude Code: no output for ${Math.round(idle / 1000)}s…`);
+  }
+  if (idle >= STUCK_MS) {
+    console.error(`  Claude Code appears stuck (no output for ${Math.round(idle / 1000)}s). Killing process.`);
+    claude.kill('SIGKILL');
+  }
+}, HEARTBEAT_MS);
 
-    claude.on('close', (code) => {
-      const duration = Math.round((Date.now() - startTime) / 1000);
-      console.log(`  Claude Code finished in ${duration}s (exit code: ${code})`);
+claude.stdout.on('data', (data) => {
+  const lines = data.toString().split('\n').filter(Boolean);
 
-      if (code !== 0 && code !== null) {
-        console.error(`  Claude Code stderr: ${stderr.substring(0, 500)}`);
-        reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 500)}`));
-      } else {
-        resolve(stdout);
+  for (const line of lines) {
+    lastEventAt = Date.now();
+
+    // Claude emits JSONL lines; keep raw for debugging
+    stdout += line + '\n';
+
+    // Optional: parse and surface useful progress
+    try {
+      const evt = JSON.parse(line);
+
+      // Commonly you'll see events like system/init, stream_event deltas, and final result
+      if (evt.type === 'stream_event' && evt.event?.delta?.text) {
+        process.stdout.write(evt.event.delta.text); // live token stream
+      } else if (evt.type === 'result') {
+        // final result line; you can also read evt.result depending on schema
+        // console.log('\n  Claude result received.');
+      } else if (evt.type === 'system') {
+        // console.log(`  Claude system: ${evt.subtype ?? ''}`);
       }
-    });
+    } catch {
+      // If a non-JSON line sneaks in, just ignore parsing.
+    }
+  }
+});
 
-    claude.on('error', (error) => {
-      reject(error);
-    });
-  });
-}
+claude.stderr.on('data', (data) => {
+  lastEventAt = Date.now();
+  stderr += data.toString();
+});
+
+claude.on('close', (code) => {
+  clearInterval(heartbeat);
+
+  const duration = Math.round((Date.now() - startTime) / 1000);
+  console.log(`\n  Claude Code finished in ${duration}s (exit code: ${code})`);
+
+  if (code !== 0 && code !== null) {
+    console.error(`  Claude Code stderr: ${stderr.substring(0, 2000)}`);
+    reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 2000)}`));
+  } else {
+    resolve(stdout); // note: this is JSONL now (stream-json), not plain text
+  }
+});
+
+claude.on('error', (error) => {
+  clearInterval(heartbeat);
+  reject(error);
+});
 
 // ============================================================
 // MAIN ORCHESTRATOR
