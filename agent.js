@@ -188,10 +188,11 @@ function runClaudeCode(prompt) {
 
     const startTime = Date.now();
 
-    const claude = spawn('claude', [
-      '-p', prompt,
-      '--allowedTools', 'Edit,Write,Bash',
-      '--output-format', 'text'
+const claude = spawn('claude', [
+  '-p', prompt,
+  '--allowedTools', 'Edit,Write,Bash',
+  '--output-format', 'text',
+  '--yes'
     ], {
       cwd: REPO_DIR,
       env: {
