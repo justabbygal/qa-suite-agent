@@ -198,7 +198,7 @@ function runClaudeCode(prompt) {
         ...process.env,
         ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       },
-      timeout: 600000  // 10 minute timeout per task
+      timeout: 1800000  // 30 minute timeout per task
     });
 
     let stdout = '';
@@ -305,6 +305,9 @@ async function processStory({ storyId, storyTitle, projectName, tasks, context }
     } catch (error) {
       console.error(`  Task ${taskNum} FAILED: ${error.message}`);
 
+      // Move failed task back to Ready for Agent so it's not stuck
+      await updateLinearStatus(task.id, 'f0156607-c95f-432a-90bd-d4af9b8483a4');
+      
       // Comment the error on the Linear task
       await addLinearComment(
         task.id,
