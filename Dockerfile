@@ -1,7 +1,10 @@
 FROM node:20-slim
 
-# Install git and Claude Code CLI
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install git, util-linux (for script), and Claude Code CLI
+RUN apt-get update && \
+    apt-get install -y git util-linux && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN npm install -g @anthropic-ai/claude-code
 
 # Set up working directory
