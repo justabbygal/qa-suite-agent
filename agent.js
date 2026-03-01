@@ -191,8 +191,8 @@ function runClaudeCode(prompt) {
 const claude = spawn('claude', [
   '-p', prompt,
   '--allowedTools', 'Edit,Write,Bash',
-  '--output-format', 'text',
-  '--yes'
+  '--dangerously-auto-approve-tools',
+  '--output-format', 'text'
     ], {
       cwd: REPO_DIR,
       env: {
