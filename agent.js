@@ -188,45 +188,47 @@ function runClaudeCode(prompt) {
 
     const startTime = Date.now();
 
-const claude = spawn('claude', [
-  '-p', prompt,
-  '--dangerously-skip-permissions',
-  '--output-format', 'text'
-], {
-  cwd: REPO_DIR,
-  env: {
-    ...process.env,
-    ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
-  },
-  timeout: 1800000 // 30 minute timeout per task
-});
+    const claude = spawn('claude', [
+      '-p', prompt,
+      '--dangerously-skip-permissions',
+      '--output-format', 'text'
+    ], {
+      cwd: REPO_DIR,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
+      },
+      timeout: 1800000 // 30 minute timeout per task
+    });
 
-let stdout = '';
-let stderr = '';
+    let stdout = '';
+    let stderr = '';
 
-claude.stdout.on('data', (data) => {
-  stdout += data.toString();
-});
+    claude.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
 
-claude.stderr.on('data', (data) => {
-  stderr += data.toString();
-});
+    claude.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
 
-claude.on('close', (code) => {
-  const duration = Math.round((Date.now() - startTime) / 1000);
-  console.log(`  Claude Code finished in ${duration}s (exit code: ${code})`);
+    claude.on('close', (code) => {
+      const duration = Math.round((Date.now() - startTime) / 1000);
+      console.log(`  Claude Code finished in ${duration}s (exit code: ${code})`);
 
-  if (code !== 0 && code !== null) {
-    console.error(`  Claude Code stderr: ${stderr.substring(0, 500)}`);
-    reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 500)}`));
-  } else {
-    resolve(stdout);
-  }
-});
+      if (code !== 0 && code !== null) {
+        console.error(`  Claude Code stderr: ${stderr.substring(0, 500)}`);
+        reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 500)}`));
+      } else {
+        resolve(stdout);
+      }
+    });
 
-claude.on('error', (error) => {
-  reject(error);
-});
+    claude.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
 
 // ============================================================
 // MAIN ORCHESTRATOR
