@@ -181,6 +181,11 @@ async function addLinearComment(issueId, body) {
 // CLAUDE CODE RUNNER
 // ============================================================
 
+function shellQuote(s) {
+  // Safe single-quote for POSIX shells: ' -> '\'' 
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
 function runClaudeCode(prompt) {
   return new Promise((resolve, reject) => {
     console.log('  Running Claude Code...');
@@ -188,38 +193,33 @@ function runClaudeCode(prompt) {
 
     const startTime = Date.now();
 
-    // Build the Claude command (as a shell command) so `script` can run it with a PTY.
-    // We JSON.stringify each arg to preserve spaces/newlines safely.
-    const claudeArgs = [
-      'claude',
-      '-p', prompt,
-      '--dangerously-skip-permissions',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages'
-    ];
+    // Build a shell command string for `script -c ...`
+    // IMPORTANT: executable `claude` is not quoted; args are safely single-quoted.
+    const cmd =
+      'claude ' +
+      '-p ' + shellQuote(prompt) + ' ' +
+      '--dangerously-skip-permissions ' +
+      '--output-format stream-json ' +
+      '--verbose ' +
+      '--include-partial-messages';
 
-    const claudeCmdStr = claudeArgs.map(a => JSON.stringify(a)).join(' ');
-
-    // `script` allocates a pseudo-TTY even in non-interactive Docker/Node.
-    // -q: quiet, -e: return child exit code, -c: command, /dev/null: no typescript file
-    const claude = spawn('script', ['-q', '-e', '-c', claudeCmdStr, '/dev/null'], {
+    const claude = spawn('script', ['-q', '-e', '-c', cmd, '/dev/null'], {
       cwd: REPO_DIR,
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
         CI: '1',
-        NO_COLOR: '1'
+        NO_COLOR: '1',
       },
-      timeout: 1800000 // 30 minute timeout per task
+      timeout: 1800000,
     });
 
     let stdout = '';
     let stderr = '';
 
     let lastEventAt = Date.now();
-    const HEARTBEAT_MS = 10_000; // log every 10s if nothing arrives
-    const STUCK_MS = 120_000;    // treat 2 minutes of silence as “stuck”
+    const HEARTBEAT_MS = 10_000;
+    const STUCK_MS = 120_000;
 
     const heartbeat = setInterval(() => {
       const idle = Date.now() - lastEventAt;
@@ -227,7 +227,9 @@ function runClaudeCode(prompt) {
         console.log(`  Claude Code: no output for ${Math.round(idle / 1000)}s…`);
       }
       if (idle >= STUCK_MS) {
-        console.error(`  Claude Code appears stuck (no output for ${Math.round(idle / 1000)}s). Killing process.`);
+        console.error(
+          `  Claude Code appears stuck (no output for ${Math.round(idle / 1000)}s). Killing process.`
+        );
         claude.kill('SIGKILL');
       }
     }, HEARTBEAT_MS);
@@ -237,16 +239,15 @@ function runClaudeCode(prompt) {
       const chunk = data.toString();
       stdout += chunk;
 
-      // Best-effort: print streaming deltas if present (JSONL)
-      const lines = chunk.split('\n').filter(Boolean);
-      for (const line of lines) {
+      // Optional: show streaming text deltas if present (best-effort)
+      for (const line of chunk.split('\n').filter(Boolean)) {
         try {
           const evt = JSON.parse(line);
           if (evt.type === 'stream_event' && evt.event?.delta?.text) {
             process.stdout.write(evt.event.delta.text);
           }
         } catch {
-          // Some non-JSON lines can appear due to PTY/script; ignore.
+          // PTY/script can emit non-JSON lines; ignore parsing failures.
         }
       }
     });
@@ -255,7 +256,7 @@ function runClaudeCode(prompt) {
       lastEventAt = Date.now();
       const s = data.toString();
       stderr += s;
-      process.stderr.write(s); // show stderr live (very useful in Docker)
+      process.stderr.write(s);
     });
 
     claude.on('close', (code) => {
@@ -264,12 +265,19 @@ function runClaudeCode(prompt) {
       const duration = Math.round((Date.now() - startTime) / 1000);
       console.log(`\n  Claude Code finished in ${duration}s (exit code: ${code})`);
 
-      // `script -e` should pass through the child exit code, but be defensive.
       if (code !== 0 && code !== null) {
-        console.error(`  Claude Code stderr: ${stderr.substring(0, 2000)}`);
-        reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 2000)}`));
+        // Include BOTH stderr and stdout because errors often show up on stdout in PTY mode.
+        const errSnippet = stderr.substring(0, 2000).trim();
+        const outSnippet = stdout.substring(0, 2000).trim();
+        reject(
+          new Error(
+            `Claude Code exited with code ${code}:\n` +
+              (errSnippet ? `STDERR:\n${errSnippet}\n` : '') +
+              (outSnippet ? `STDOUT:\n${outSnippet}\n` : '')
+          )
+        );
       } else {
-        resolve(stdout); // stream-json JSONL + any PTY noise
+        resolve(stdout);
       }
     });
 
