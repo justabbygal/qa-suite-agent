@@ -9,6 +9,10 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error('ANTHROPIC_API_KEY is missing from environment');
+}
+
 // Linear status IDs
 const STATUS = {
   IN_PROGRESS: 'e548a1e0-408e-457d-b67b-baa43a571c59',
@@ -205,12 +209,11 @@ function runClaudeCode(prompt) {
 
     const claude = spawn('script', ['-q', '-e', '-c', cmd, '/dev/null'], {
       cwd: REPO_DIR,
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
-        CI: '1',
-        NO_COLOR: '1',
-      },
+env: {
+  ...process.env,
+  CI: '1',
+  NO_COLOR: '1'
+},
       timeout: 1800000,
     });
 
