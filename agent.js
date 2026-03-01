@@ -193,8 +193,11 @@ function shellQuote(s) {
 function runClaudeCode(prompt) {
   return new Promise((resolve, reject) => {
     console.log('  Running Claude Code...');
-    console.log(`  Prompt length: ${prompt.length} chars`);
+console.log(`  Prompt length: ${prompt.length} chars`);
 
+const k = (process.env.ANTHROPIC_API_KEY || '').trim();
+console.log(`ANTHROPIC_API_KEY length=${k.length}, prefix=${k.slice(0, 10)}, suffix=${k.slice(-6)}`);
+    
     const startTime = Date.now();
 
     // Build a shell command string for `script -c ...`
