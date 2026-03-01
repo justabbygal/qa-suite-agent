@@ -214,6 +214,7 @@ console.log(`ANTHROPIC_API_KEY length=${k.length}, prefix=${k.slice(0, 10)}, suf
       cwd: REPO_DIR,
 env: {
   ...process.env,
+  ANTHROPIC_API_KEY: k,
   CI: '1',
   NO_COLOR: '1'
 },
