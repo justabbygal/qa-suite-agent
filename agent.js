@@ -188,93 +188,97 @@ function runClaudeCode(prompt) {
 
     const startTime = Date.now();
 
-    const claude = spawn('claude', [
-  '-p', prompt,
-  '--dangerously-skip-permissions',
-  '--output-format', 'stream-json',
-  '--verbose',
-  '--include-partial-messages',
-], {
-  cwd: REPO_DIR,
-  env: {
-    ...process.env,
-    ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
-  },
-  timeout: 1800000
-});
+    // Build the Claude command (as a shell command) so `script` can run it with a PTY.
+    // We JSON.stringify each arg to preserve spaces/newlines safely.
+    const claudeArgs = [
+      'claude',
+      '-p', prompt,
+      '--dangerously-skip-permissions',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages'
+    ];
 
-let stdout = '';
-let stderr = '';
+    const claudeCmdStr = claudeArgs.map(a => JSON.stringify(a)).join(' ');
 
-let lastEventAt = Date.now();
-const HEARTBEAT_MS = 10_000;     // log every 10s if nothing arrives
-const STUCK_MS = 120_000;        // treat 2 minutes of silence as “stuck”
+    // `script` allocates a pseudo-TTY even in non-interactive Docker/Node.
+    // -q: quiet, -e: return child exit code, -c: command, /dev/null: no typescript file
+    const claude = spawn('script', ['-q', '-e', '-c', claudeCmdStr, '/dev/null'], {
+      cwd: REPO_DIR,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
+        CI: '1',
+        NO_COLOR: '1'
+      },
+      timeout: 1800000 // 30 minute timeout per task
+    });
 
-const heartbeat = setInterval(() => {
-  const idle = Date.now() - lastEventAt;
-  if (idle >= HEARTBEAT_MS) {
-    console.log(`  Claude Code: no output for ${Math.round(idle / 1000)}s…`);
-  }
-  if (idle >= STUCK_MS) {
-    console.error(`  Claude Code appears stuck (no output for ${Math.round(idle / 1000)}s). Killing process.`);
-    claude.kill('SIGKILL');
-  }
-}, HEARTBEAT_MS);
+    let stdout = '';
+    let stderr = '';
 
-claude.stdout.on('data', (data) => {
-  const lines = data.toString().split('\n').filter(Boolean);
+    let lastEventAt = Date.now();
+    const HEARTBEAT_MS = 10_000; // log every 10s if nothing arrives
+    const STUCK_MS = 120_000;    // treat 2 minutes of silence as “stuck”
 
-  for (const line of lines) {
-    lastEventAt = Date.now();
-
-    // Claude emits JSONL lines; keep raw for debugging
-    stdout += line + '\n';
-
-    // Optional: parse and surface useful progress
-    try {
-      const evt = JSON.parse(line);
-
-      // Commonly you'll see events like system/init, stream_event deltas, and final result
-      if (evt.type === 'stream_event' && evt.event?.delta?.text) {
-        process.stdout.write(evt.event.delta.text); // live token stream
-      } else if (evt.type === 'result') {
-        // final result line; you can also read evt.result depending on schema
-        // console.log('\n  Claude result received.');
-      } else if (evt.type === 'system') {
-        // console.log(`  Claude system: ${evt.subtype ?? ''}`);
+    const heartbeat = setInterval(() => {
+      const idle = Date.now() - lastEventAt;
+      if (idle >= HEARTBEAT_MS) {
+        console.log(`  Claude Code: no output for ${Math.round(idle / 1000)}s…`);
       }
-    } catch {
-      // If a non-JSON line sneaks in, just ignore parsing.
-    }
-  }
-});
+      if (idle >= STUCK_MS) {
+        console.error(`  Claude Code appears stuck (no output for ${Math.round(idle / 1000)}s). Killing process.`);
+        claude.kill('SIGKILL');
+      }
+    }, HEARTBEAT_MS);
 
-claude.stderr.on('data', (data) => {
-  lastEventAt = Date.now();
-  stderr += data.toString();
-});
+    claude.stdout.on('data', (data) => {
+      lastEventAt = Date.now();
+      const chunk = data.toString();
+      stdout += chunk;
 
-claude.on('close', (code) => {
-  clearInterval(heartbeat);
+      // Best-effort: print streaming deltas if present (JSONL)
+      const lines = chunk.split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const evt = JSON.parse(line);
+          if (evt.type === 'stream_event' && evt.event?.delta?.text) {
+            process.stdout.write(evt.event.delta.text);
+          }
+        } catch {
+          // Some non-JSON lines can appear due to PTY/script; ignore.
+        }
+      }
+    });
 
-  const duration = Math.round((Date.now() - startTime) / 1000);
-  console.log(`\n  Claude Code finished in ${duration}s (exit code: ${code})`);
+    claude.stderr.on('data', (data) => {
+      lastEventAt = Date.now();
+      const s = data.toString();
+      stderr += s;
+      process.stderr.write(s); // show stderr live (very useful in Docker)
+    });
 
-  if (code !== 0 && code !== null) {
-    console.error(`  Claude Code stderr: ${stderr.substring(0, 2000)}`);
-    reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 2000)}`));
-  } else {
-    resolve(stdout); // note: this is JSONL now (stream-json), not plain text
-  }
-});
+    claude.on('close', (code) => {
+      clearInterval(heartbeat);
 
-claude.on('error', (error) => {
-  reject(error);
-});
+      const duration = Math.round((Date.now() - startTime) / 1000);
+      console.log(`\n  Claude Code finished in ${duration}s (exit code: ${code})`);
 
-  });   // closes new Promise(...)
-}       // closes runClaudeCode(...)
+      // `script -e` should pass through the child exit code, but be defensive.
+      if (code !== 0 && code !== null) {
+        console.error(`  Claude Code stderr: ${stderr.substring(0, 2000)}`);
+        reject(new Error(`Claude Code exited with code ${code}: ${stderr.substring(0, 2000)}`));
+      } else {
+        resolve(stdout); // stream-json JSONL + any PTY noise
+      }
+    });
 
+    claude.on('error', (error) => {
+      clearInterval(heartbeat);
+      reject(error);
+    });
+  });
+}
 // ============================================================
 // MAIN ORCHESTRATOR
 // ============================================================
